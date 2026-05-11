@@ -14,12 +14,67 @@
 
 ## 修改内容概览
 
-共需添加 **61 行代码**，分为两部分：
+共需添加 **76 行代码**，分为三部分：
 
-1. **消息注入逻辑**（约 22 行）- 在 `_normalize_inbound()` 函数中
-2. **机器人名称获取方法**（约 39 行）- 新增 `_get_bot_name_from_chat_members()` 方法
+1. **群聊类型正确识别**（约 15 行）- 修复 `_handle_message_event_data()` 中的 chat_type 判断
+2. **消息注入逻辑**（约 22 行）- 在 `_process_inbound_message()` 函数中
+3. **机器人名称获取方法**（约 39 行）- 新增 `_get_bot_name_from_chat_members()` 方法
 
-## 修改位置 1：消息注入
+---
+
+## 修改位置 1：群聊类型正确识别（重要 Bug 修复）
+
+**文件**: `gateway/platforms/feishu.py`
+**函数**: `FeishuAdapter._handle_message_event_data()`
+**行号**: 约 1995 行
+
+**问题**：飞书 Bot-to-Bot 消息的 `message.chat_type` 字段可能缺失或错误，导致群聊消息被错误识别为私聊（p2p），回复发送到私聊而非群聊。
+
+**解决方案**：先调用 `get_chat_info()` API 获取真实的 chat 类型。
+
+替换原有代码：
+
+```python
+# 原代码（有问题）
+chat_type = getattr(message, "chat_type", "p2p")
+chat_id = getattr(message, "chat_id", "") or ""
+if chat_type != "p2p" and not self._should_accept_group_message(message, sender_id, chat_id):
+    ...
+```
+
+为：
+
+```python
+# 新代码（修复后）
+# Get chat_id first, then resolve true chat_type from API
+# (message.chat_type may be missing or wrong for bot-to-bot messages)
+chat_id = getattr(message, "chat_id", "") or ""
+event_chat_type = getattr(message, "chat_type", "p2p")
+
+# Fetch real chat info to determine if this is group vs p2p
+chat_info = await self.get_chat_info(chat_id)
+resolved_chat_type = chat_info.get("type", "dm")
+
+# Use resolved type, but fallback to event_chat_type if API failed
+if resolved_chat_type == "dm" and event_chat_type != "p2p":
+    # API returned dm but event says otherwise - trust event
+    resolved_chat_type = self._map_chat_type(event_chat_type)
+
+if resolved_chat_type != "dm" and not self._should_accept_group_message(message, sender_id, chat_id):
+    logger.debug("[Feishu] Dropping group message that failed mention/policy gate: %s", message_id)
+    return
+await self._process_inbound_message(
+    data=data,
+    message=message,
+    sender_id=sender_id,
+    chat_type=event_chat_type,  # Pass original to _process_inbound_message
+    message_id=message_id,
+)
+```
+
+---
+
+## 修改位置 2：消息注入
 
 **文件**: `gateway/platforms/feishu.py`
 **函数**: `FeishuAdapter._normalize_inbound()`
@@ -50,7 +105,7 @@ if sender_type_raw in {"bot", "app"}:
         text = sender_type_hint + text
 ```
 
-## 修改位置 2：机器人名称获取方法
+## 修改位置 3：机器人名称获取方法
 
 **位置**: `_resolve_sender_profile()` 方法附近（约 3290 行）
 
@@ -99,7 +154,22 @@ async def _get_bot_name_from_chat_members(self, chat_id: str, bot_open_id: str) 
 
 ## 上下文参考
 
-### 修改位置 1 上下文
+### 修改位置 1 上下文（群聊类型识别）
+
+```python
+# ... 现有代码 ...
+if self._is_self_sent_bot_message(event):
+    logger.debug("[Feishu] Dropping self-sent bot event: %s", message_id)
+    return
+
+# === 在此处替换原有的 chat_type 获取逻辑 ===
+# 原代码: chat_type = getattr(message, "chat_type", "p2p")
+# 新代码: 调用 get_chat_info() API 获取真实类型
+
+# ... 后续代码 ...
+```
+
+### 修改位置 2 上下文（消息注入）
 
 ```python
 # ... 现有代码 ...
@@ -117,7 +187,7 @@ source = self.build_source(
 # ... 后续代码 ...
 ```
 
-### 修改位置 2 上下文
+### 修改位置 3 上下文（机器人名称获取方法）
 
 ```python
 # ... 现有代码 ...
@@ -180,6 +250,7 @@ async def _fetch_message_text(self, message_id: str) -> Optional[str]:
 
 ## 注意事项
 
+- **修改位置 1 是关键 Bug 修复**：不修复会导致群聊 Bot-to-Bot 消息被错误路由到私聊
 - 此修改仅影响飞书平台（不影响其他平台）
 - `sender_type` 值可能因飞书版本不同而变化，当前支持 `bot` 和 `app`
 - 群成员 API 每页最多 50 条，如果群内机器人超过 50 个可能需要分页
