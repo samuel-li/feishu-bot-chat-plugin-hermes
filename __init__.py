@@ -24,22 +24,66 @@ def _inject_collaboration_context(session_id: str, user_message: str, platform: 
     if platform not in ("feishu", "lark"):
         return None
 
-    # Inject on first turn or when collaboration keywords appear
+    # Check if message is from another bot (A2A task request)
+    is_from_bot = user_message.strip().startswith("[来自机器人「")
+
+    # Inject on first turn, collaboration keywords, or when message is from another bot
     is_first_turn = kwargs.get("is_first_turn", False)
     has_collaboration_keywords = any(kw in user_message.lower() for kw in [
         "协作", "分配", "一起", "群内", "合作", "让", "问问", "帮忙"
     ])
 
-    if not (is_first_turn or has_collaboration_keywords):
+    # Critical: Always inject when message is from another bot
+    if not (is_first_turn or has_collaboration_keywords or is_from_bot):
         return None
 
-    # Avoid duplicate injection
-    if session_id in _sessions_with_context and not has_collaboration_keywords:
+    # Avoid duplicate injection (but allow re-injection when from bot)
+    if session_id in _sessions_with_context and not is_from_bot:
         return None
 
     _sessions_with_context.add(session_id)
 
-    context = """
+    # Different context based on whether this is a bot-to-bot message
+    if is_from_bot:
+        # Extract bot name and at_tag from the message prefix if present
+        import re
+        match = re.search(r'\[来自机器人「(.+?)」— 如需 @ 回请使用：<at user_id="([^"]+)">[^<]+</at>\]', user_message)
+        if match:
+            sender_name = match.group(1)
+            sender_id = match.group(2)
+            context = f"""
+[飞书 Bot-to-Bot 协作 — 重要！]
+
+你收到了来自机器人「{sender_name}」的任务请求。
+
+**必须遵守的回复规则**：
+1. 完成任务后，必须在回复开头使用以下 @ 标签：
+   <at user_id="{sender_id}">{sender_name}</at> ({sender_name})
+
+2. 直接复制上面的 @ 标签到你的回复开头，不要修改格式
+
+3. @ 标签格式必须是 <at user_id="ou_xxx">名字</at>，不能用 @名字 这种写法
+
+4. 如果只是通知（消息含 🔕仅通知），则不需要 @ 回
+
+示例回复格式：
+<at user_id="{sender_id}">{sender_name}</at> ({sender_name})
+
+任务已完成，结果如下：
+...
+"""
+        else:
+            context = """
+[飞书 Bot-to-Bot 协作]
+
+消息来自另一个机器人。如果这是任务请求：
+- 完成后必须 @ 回发送者汇报结果
+- 使用消息中提供的 <at user_id="ou_xxx">名字</at> 格式
+- 不能用 @名字 这种写法
+"""
+    else:
+        # Regular collaboration context injection
+        context = """
 [飞书群内 Bot 协作]
 
 你正在飞书群聊环境中。如果需要 @ 其他机器人协作：
@@ -55,6 +99,7 @@ def _inject_collaboration_context(session_id: str, user_message: str, platform: 
 - 任务型 @：对方完成后会 @ 回你
 - 通知型 @：加 🔕仅通知 标记，对方不需要回复
 """
+
     return {"context": context}
 
 
