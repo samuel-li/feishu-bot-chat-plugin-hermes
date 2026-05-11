@@ -125,6 +125,90 @@ hermes-plugin/
         └── SKILL.md   # 协作指南技能
 ```
 
+## Hermes 框架要求
+
+本插件需要 Hermes 框架支持以下接口和 Hook：
+
+### 1. 插件注册 API
+
+Hermes 需要实现 `ctx` 上下文对象，提供以下注册方法：
+
+```python
+# tools.py 中的调用示例
+ctx.register_tool(
+    name="list_group_bots",       # 工具名称
+    toolset="feishu-bot-chat",    # 工具集名称
+    schema=schemas.LIST_GROUP_BOTS,  # JSON Schema
+    handler=tools.list_group_bots    # 处理函数
+)
+
+ctx.register_hook(
+    "pre_llm_call",               # Hook 名称
+    _inject_collaboration_context  # Hook 处理函数
+)
+
+ctx.register_skill(
+    "a2a-collaboration-guide",    # 技能名称
+    skill_md                      # SKILL.md 文件路径
+)
+```
+
+### 2. pre_llm_call Hook 参数
+
+Hook 函数 `_inject_collaboration_context` 接收以下参数：
+
+```python
+def _inject_collaboration_context(
+    session_id: str,      # 会话 ID（用于避免重复注入）
+    user_message: str,    # 用户消息内容
+    platform: str,        # 平台标识：'feishu' 或 'lark'
+    is_first_turn: bool,  # 是否为首轮对话
+    **kwargs              # 其他上下文信息
+) -> dict | None:         # 返回 {'context': str} 或 None
+```
+
+**Hermes 需要在调用 LLM 前传递这些参数**。
+
+### 3. 配置文件读取
+
+插件会尝试从 `~/.hermes/config.yaml` 读取飞书配置（当环境变量不存在时）：
+
+```yaml
+platforms:
+  feishu:
+    app_id: "cli_xxxx"
+    app_secret: "xxxxx"
+    domain: "feishu"  # 或 "lark"
+```
+
+### 4. 调用工具时的 kwargs
+
+当 LLM 调用工具时，Hermes 需要传递会话相关信息：
+
+```python
+# list_group_bots 调用示例
+result = await tools.list_group_bots(
+    args={"chat_id": "oc_xxx"},  # LLM 提供的参数
+    # Hermes 可传递以下 kwargs：
+    session_id="xxx",
+    chat_id="oc_xxx",  # 当前会话的群聊 ID（可选）
+    ...
+)
+```
+
+### 5. 实现 Checklist
+
+在 Hermes 中集成此插件前，确认以下功能已实现：
+
+- [ ] 插件发现机制：扫描 `~/.hermes/plugins/` 目录
+- [ ] 插件 manifest 解析：读取 `plugin.yaml`
+- [ ] `ctx.register_tool()` 工具注册接口
+- [ ] `ctx.register_hook()` Hook 注册接口
+- [ ] `ctx.register_skill()` 技能注册接口
+- [ ] `pre_llm_call` Hook 调用时机：LLM 调用前
+- [ ] Hook 参数传递：`session_id`, `user_message`, `platform`, `is_first_turn`
+- [ ] 平台标识支持：识别飞书/Lark 会话并传递 `platform` 参数
+
 ## 环境变量
 
 | 变量 | 说明 | 必需 |
