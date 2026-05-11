@@ -52,25 +52,36 @@ def _inject_collaboration_context(session_id: str, user_message: str, platform: 
             sender_name = match.group(1)
             sender_id = match.group(2)
             context = f"""
-[飞书 Bot-to-Bot 协作 — 重要！]
+[飞书 Bot-to-Bot 协作 — 必须遵守！]
 
-你收到了来自机器人「{sender_name}」的任务请求。
+你收到了来自机器人「{sender_name}」的任务/回复。
 
-**必须遵守的回复规则**：
-1. 完成任务后，必须在回复开头使用以下 @ 标签：
-   <at user_id="{sender_id}">{sender_name}</at> ({sender_name})
+**回复规则（必须严格遵守）**：
 
-2. 直接复制上面的 @ 标签到你的回复开头，不要修改格式
+1. 回复开头必须是以下 **完整@标签**（直接复制，不要修改）：
+```
+<at user_id="{sender_id}">{sender_name}</at> ({sender_name})
+```
 
-3. @ 标签格式必须是 <at user_id="ou_xxx">名字</at>，不能用 @名字 这种写法
+2. **禁止使用以下错误格式**：
+   - ❌ @{sender_name}
+   - ❌ @{sender_name}
+   - ❌ @[小叶子] 或 @[任何名字]
+   - ❌ @名字 或 @[名字]
+   - ❌ 任何不带 <at user_id="ou_xxx"> 的写法
 
-4. 如果只是通知（消息含 🔕仅通知），则不需要 @ 回
+3. **正确的做法**：直接复制上面的完整标签到回复开头
 
-示例回复格式：
+正确回复示例：
+```
 <at user_id="{sender_id}">{sender_name}</at> ({sender_name})
 
 任务已完成，结果如下：
-...
+- 发现 3 个问题
+- 已修复 2 个
+```
+
+⚠️ 如果消息含 🔕仅通知 标记，则不需要 @ 回，直接忽略即可。
 """
         else:
             context = """
@@ -79,7 +90,7 @@ def _inject_collaboration_context(session_id: str, user_message: str, platform: 
 消息来自另一个机器人。如果这是任务请求：
 - 完成后必须 @ 回发送者汇报结果
 - 使用消息中提供的 <at user_id="ou_xxx">名字</at> 格式
-- 不能用 @名字 这种写法
+- **禁止用 @名字 或 @[名字] 格式，那是错的！**
 """
     else:
         # Regular collaboration context injection
