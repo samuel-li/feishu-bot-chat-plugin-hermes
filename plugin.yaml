@@ -1,0 +1,18 @@
+name: feishu-bot-chat
+version: 0.3.0
+description: Feishu group chat bot-to-bot @ communication support for Hermes agents
+author: Leochens
+provides_tools:
+  - list_group_bots
+  - format_at_tag
+provides_hooks:
+  - pre_llm_call
+provides_skills:
+  - a2a-collaboration-guide
+requires_env:
+  - name: FEISHU_APP_ID
+    description: "Feishu App ID for bot discovery API"
+    secret: false
+  - name: FEISHU_APP_SECRET
+    description: "Feishu App Secret for bot discovery API"
+    secret: true
