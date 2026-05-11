@@ -21,16 +21,41 @@
 
 ## 安装
 
+### 从 GitHub 直接安装
+
+```bash
+# 使用完整 URL
+hermes plugins install https://github.com/samuel-li/feishu-bot-chat-plugin-hermes.git
+
+# 或使用 owner/repo 简写
+hermes plugins install samuel-li/feishu-bot-chat-plugin-hermes
+
+# 安装后启用插件
+hermes plugins enable feishu-bot-chat
+
+# 或一步完成（安装并启用）
+hermes plugins install samuel-li/feishu-bot-chat-plugin-hermes --enable
+```
+
+### 手动安装
+
 ```bash
 # 复制插件到 Hermes 插件目录
-cp -r hermes-plugin ~/.hermes/plugins/feishu-bot-chat
+cp -r . ~/.hermes/plugins/feishu-bot-chat
 
 # 启用插件
 hermes plugins enable feishu-bot-chat
+```
 
-# 配置环境变量（在 ~/.hermes/.env 或启动时设置）
+### 配置环境变量
+
+```bash
+# 在 ~/.hermes/.env 中设置
 export FEISHU_APP_ID="cli_xxxx"
 export FEISHU_APP_SECRET="xxxxx"
+
+# 或通过交互式配置（安装时会自动提示）
+hermes plugins install samuel-li/feishu-bot-chat-plugin-hermes
 ```
 
 ## 工具说明
