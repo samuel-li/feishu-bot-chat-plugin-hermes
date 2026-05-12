@@ -299,6 +299,48 @@ result = await tools.list_group_bots(
 
 本插件需要 Hermes Gateway 进行以下修改（详见 `HERMES_PATCH.md`）：
 
+### HERMES_PATCH.md 文档作用
+
+由于 Hermes 框架不支持 `inbound_claim` hook（消息拦截能力），Bot-to-Bot 协作的关键功能需要在 Hermes Gateway 源码层面补全。
+
+**该文档记录了以下三项关键修改**：
+
+| 修改 | 文件位置 | 解决的问题 |
+|------|---------|-----------|
+| chat_type 正确识别 | `_handle_message_event_data()` | Bot消息路由错误（群聊→私聊） |
+| Bot 发送者信息注入 | `_process_inbound_message()` | Agent不知道消息来自哪个Bot |
+| Bot 名称获取方法 | `_get_bot_name_from_chat_members()` | API获取机器人显示名称 |
+
+### 修改前后对比
+
+**修改前**（存在问题）：
+```
+群聊中 BotA @ BotB → BotB 收到消息
+→ BotB 回复发送到 BotA 的私聊（错误路由）
+→ BotB 使用错误的 @ 格式（如 @[BotA]）
+→ 协作链断裂
+```
+
+**修改后**（正常工作）：
+```
+群聊中 BotA @ BotB → BotB 收到带发送者信息的消息
+→ BotB 回复发送到群聊（正确路由）
+→ BotB 使用正确的 <at> 格式
+→ BotA 收到回复，协作继续
+```
+
+### 与 OpenClaw inbound_claim 的差异
+
+| 能力 | OpenClaw inbound_claim | Hermes + HERMES_PATCH |
+|------|------------------------|----------------------|
+| 识别 Bot 发送者 | ✅ Hook 参数提供 | ✅ 消息前缀注入 |
+| 提供 @ 回格式 | ✅ 可自动生成 | ✅ 消息前缀提供模板 |
+| 正确路由回复 | ✅ 原生支持 | ✅ chat_type API 修复 |
+| 消息拦截/阻止 | ✅ return {"action": "block"} | ❌ 不支持 |
+| 自动转换格式 | ✅ 可修改消息内容 | ❌ 不支持 |
+
+**结论**：HERMES_PATCH 补全了 Bot-to-Bot 协作的核心需求，但缺少完整的消息拦截能力。对于协作场景已足够，若需消息预处理能力则需 Hermes 框架层面支持。
+
 ### 1. chat_type 正确识别（关键 Bug 修复）
 
 飞书 Bot-to-Bot 消息的 `message.chat_type` 字段可能缺失，导致群聊消息错误路由到私聊。
