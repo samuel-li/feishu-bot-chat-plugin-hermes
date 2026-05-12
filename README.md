@@ -9,15 +9,19 @@
 | 消息拦截 | inbound_claim hook | ❌ 不支持（Hermes 不处理消息收发） |
 | @ 标签转换 | message_sending hook 自动转换 | ✅ 提供 format_at_tag 工具手动生成 |
 | Bot 发现 | before_prompt_build 自动注入 | ✅ 提供 list_group_bots 工具 + pre_llm_call hook |
+| 协作判断 | 关键字匹配 | ✅ Agent 自行判断（更灵活） |
 | 技能注入 | skills 目录 | ✅ 相同（ctx.register_skill） |
+| 闭环机制 | 无 | ✅ `[任务完成]` 标记防止无限循环 |
 
 **架构差异说明**：
 - OpenClaw 是 Gateway 框架，可以拦截和处理消息流
 - Hermes 是 LLM Agent 框架，主要通过 Tools 和 pre_llm_call hook 工作
 
-因此 Hermes 版本采用"工具驱动"方式：
-- LLM 需要时主动调用工具获取 Bot 信息
+因此 Hermes 版本采用"工具驱动 + Agent 判断"方式：
+- Agent 自行判断是否需要协作（不依赖关键字匹配）
+- 需要协作时主动调用工具获取 Bot 信息
 - 手动调用 format_at_tag 生成 @ 标签
+- 内置闭环机制防止无限循环
 
 ## 安装
 
@@ -118,13 +122,15 @@ hermes plugins install samuel-li/feishu-bot-chat-plugin-hermes
 
 在每次 LLM 调用前注入协作上下文（仅飞书平台）。
 
-注入条件：
-- 第一轮对话
-- 或用户消息包含协作关键字（"协作", "分配", "一起" 等）
+**注入策略**：
+- **第一轮对话**：注入协作指南，让 Agent 自行判断是否需要协作
+- **收到 Bot 消息**：注入具体回复格式指令（包含正确的 `<at>` 标签格式）
 
-注入内容：
-- 协作规则简述
-- 工具使用提示
+**Agent 自行判断协作需求**：
+- ✅ 需要协作：用户明确要求"让xxx机器人帮忙"、"分配给xxx"、"你们讨论一下"
+- ❌ 不需要协作：用户只是让你分析/解释/回答问题，任务自己能完成
+
+**不再使用关键字匹配**，避免"帮忙"等常见词误触发。
 
 ## Skills
 
@@ -140,14 +146,16 @@ skill_view("feishu-bot-chat:a2a-collaboration-guide")
 ## 文件结构
 
 ```
-hermes-plugin/
+feishu-bot-chat-plugin-hermes/
 ├── plugin.yaml        # 插件 manifest
-├── __init__.py        # register(ctx) 注册逻辑
+├── __init__.py        # register(ctx) 注册逻辑 + pre_llm_call hook
 ├── schemas.py         # 工具 schema 定义
 ├── tools.py           # 工具处理函数
+├── README.md          # 本文档
+├── HERMES_PATCH.md    # Hermes Gateway 修改指南
 └── skills/
     └── a2a-collaboration-guide/
-        └── SKILL.md   # 协作指南技能
+        └── SKILL.md   # 协作指南技能（含闭环机制）
 ```
 
 ## Hermes 框架要求
@@ -244,12 +252,71 @@ result = await tools.list_group_bots(
 
 ## 使用流程
 
+### 单机器人协作示例
+
 1. 用户在飞书群聊中说"让前端机器人帮忙看看这个页面"
-2. Agent 调用 `list_group_bots` 获取群内机器人列表
-3. Agent 找到"前端机器人"的 open_id
-4. Agent 调用 `format_at_tag` 生成 @ 标签
-5. Agent 回复消息中包含生成的 @ 标签
-6. 飞书原生投递消息到前端机器人
+2. Agent 收到消息，注入协作上下文，判断需要协作
+3. Agent 调用 `list_group_bots` 获取群内机器人列表
+4. Agent 找到"前端机器人"的 open_id
+5. Agent 调用 `format_at_tag` 生成 @ 标签
+6. Agent 直接在回复中 @ 前端机器人分配任务
+7. 前端机器人收到消息，回复时正确使用 `<at>` 标签
+8. 前端机器人末尾加 `[任务完成]` 标记
+9. 原 Agent 收到结果，汇总后回复用户（不再 @ 回前端机器人）
+
+### 多机器人讨论示例
+
+用户说"让小侠和小叶子讨论一下这个方案"：
+
+```
+小侠: <at user_id="ou_leaf">小叶子</at> (小叶子) 
+      请分析一下数据部分...
+
+小叶子: <at user_id="ou_hero">小侠</at> (小侠)
+        数据分析完成，建议...
+        [任务完成]
+
+小侠: 收到小叶子的分析，我来汇总给用户...
+      （不再 @ 小叶子，任务闭环）
+```
+
+### 协作闭环机制
+
+防止机器人无限循环 @ 来 @ 去：
+
+| 标记 | 含义 | 收到后的处理 |
+|------|------|-------------|
+| `[任务完成]` | 任务已闭环 | 不再 @ 回，汇总给用户 |
+| "已完成"/"结果如下" | 结果汇报 | 不再 @ 回 |
+| 🔕仅通知 | 通知型消息 | 不需要回复 |
+
+**关键规则**：
+- 任务完成后加 `[任务完成]` 标记
+- 收到汇报后只汇总给用户，不再继续 @ 对方
+- 只有明确需要对方继续工作时才再次 @
+
+## Hermes Gateway 修改
+
+本插件需要 Hermes Gateway 进行以下修改（详见 `HERMES_PATCH.md`）：
+
+### 1. chat_type 正确识别（关键 Bug 修复）
+
+飞书 Bot-to-Bot 消息的 `message.chat_type` 字段可能缺失，导致群聊消息错误路由到私聊。
+
+**解决方案**：调用 `get_chat_info()` API 获取真实的 chat 类型。
+
+### 2. Bot 发送者信息注入
+
+当其他机器人 @ 本机器人时，在消息前注入发送者信息：
+```
+[来自机器人「小叶子」— 如需 @ 回请使用：<at user_id="ou_xxx">小叶子</at>]
+```
+
+### 3. Bot 名称获取方法
+
+新增 `_get_bot_name_from_chat_members()` 方法，三层 fallback 获取机器人名称。
+
+**详见**: `HERMES_PATCH.md`
 
 ## License
 
