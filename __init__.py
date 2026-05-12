@@ -30,7 +30,7 @@ def _inject_collaboration_context(session_id: str, user_message: str, platform: 
     # Inject on first turn, collaboration keywords, or when message is from another bot
     is_first_turn = kwargs.get("is_first_turn", False)
     has_collaboration_keywords = any(kw in user_message.lower() for kw in [
-        "协作", "分配", "一起", "群内", "合作", "让", "问问", "帮忙"
+        "协作", "分配", "一起", "群内", "合作", "让", "问问", "帮忙", "讨论"
     ])
 
     # Critical: Always inject when message is from another bot
@@ -51,64 +51,114 @@ def _inject_collaboration_context(session_id: str, user_message: str, platform: 
         if match:
             sender_name = match.group(1)
             sender_id = match.group(2)
-            context = f"""
-[飞书 Bot-to-Bot 协作 — 必须遵守！]
 
-你收到了来自机器人「{sender_name}」的任务/回复。
+            # Detect message type: task request vs result report
+            is_result_report = any(marker in user_message for marker in [
+                "任务已完成", "已完成", "结果如下", "检查完成", "分析完成",
+                "总结如下", "回复如下", "[任务完成]", "[结果汇报]"
+            ])
 
-**回复规则（必须严格遵守）**：
+            if is_result_report:
+                # This is a result report - don't @ back, just process and inform user
+                context = f"""
+[飞书 Bot-to-Bot 协作 — 结果汇报]
 
-1. 回复开头必须是以下 **完整@标签**（直接复制，不要修改）：
+机器人「{sender_name}」向你汇报了任务结果。
+
+**回复规则**：
+- **不要 @ 回发送者** — 这是结果汇报，任务已闭环
+- 整理结果内容，回复给发起这个协作的用户
+- 如果你是协作协调者，汇总所有机器人的结果后统一回复用户
+
+**正确做法**：
+```
+收到「{sender_name}」的汇报：
+- xxx问题已解决
+- xxx建议是...
+
+我来汇总一下整体情况...
+```
+
+**禁止 @ 回** — 除非你有新的任务需要对方执行（那应该另开一轮协作）。
+"""
+            else:
+                # This is a task request - must @ back
+                context = f"""
+[飞书 Bot-to-Bot 协作 — 任务请求]
+
+你收到了来自机器人「{sender_name}」的任务请求。
+
+⚠️ **回复格式是强制性的，必须严格遵守**：
+
+你的回复**第一行**必须是以下完整@标签（直接复制，一字不改）：
 ```
 <at user_id="{sender_id}">{sender_name}</at> ({sender_name})
 ```
 
-2. **禁止使用以下错误格式**：
-   - ❌ @{sender_name}
-   - ❌ @{sender_name}
-   - ❌ @[小叶子] 或 @[任何名字]
-   - ❌ @名字 或 @[名字]
-   - ❌ 任何不带 <at user_id="ou_xxx"> 的写法
+**回复末尾加状态标记**（防止无限循环）：
+- 如果任务完成：在末尾加 `[任务完成]`
+- 如果需要对方继续：明确说明下一步需求
 
-3. **正确的做法**：直接复制上面的完整标签到回复开头
-
-正确回复示例：
+**回复示例**：
 ```
 <at user_id="{sender_id}">{sender_name}</at> ({sender_name})
 
 任务已完成，结果如下：
 - 发现 3 个问题
 - 已修复 2 个
+
+[任务完成]
 ```
 
-⚠️ 如果消息含 🔕仅通知 标记，则不需要 @ 回，直接忽略即可。
+**禁止的格式**：
+- ❌ @{sender_name} 或 @[名字] — 不会触发飞书投递
+- ❌ 不在第一行放@标签
+- ❌ 汇报结果后继续@对方讨论（应该用 [任务完成] 标记闭环）
+
+**协作闭环规则**：
+- 任务完成后加 `[任务完成]` 标记
+- 收到 `[任务完成]` 的机器人不再@回去
+- 只有明确需要对方继续工作时才再次@
 """
         else:
             context = """
 [飞书 Bot-to-Bot 协作]
 
-消息来自另一个机器人。如果这是任务请求：
-- 完成后必须 @ 回发送者汇报结果
-- 使用消息中提供的 <at user_id="ou_xxx">名字</at> 格式
-- **禁止用 @名字 或 @[名字] 格式，那是错的！**
+消息来自另一个机器人。
+
+- 如果是任务请求：回复第一行必须是 `<at user_id="ou_xxx">名字</at> (名字)`
+- 如果是结果汇报（含"已完成"/"结果如下"）：不要再@回去
+- 任务完成后在末尾加 `[任务完成]` 标记防止无限循环
 """
     else:
-        # Regular collaboration context injection
+        # Regular collaboration context injection - when user asks for collaboration
         context = """
 [飞书群内 Bot 协作]
 
-你正在飞书群聊环境中。如果需要 @ 其他机器人协作：
+你正在飞书群聊环境中。用户要求机器人之间协作讨论。
 
-1. 先用 list_group_bots 工具查询群内可协作的机器人
-2. 用 format_at_tag 工具生成正确的 @ 标签（必须用 <at user_id="ou_xxx">名字</at> 格式）
-3. 不要用 @名字 这种明文写法，那不会触发飞书投递
+**协作流程规则**：
 
-核心规则：
-- 默认不主动 @ 其他机器人
-- 每次回复最多 @ 1 个机器人
-- 区分"提到"和"请求"：提到用名字，请求才用 <at> 标签
-- 任务型 @：对方完成后会 @ 回你
-- 通知型 @：加 🔕仅通知 标记，对方不需要回复
+当用户说"让机器人们讨论"、"分配给xxx机器人"时：
+1. **直接开始协作** — 不要先向用户报告再@其他机器人
+2. 先调用 `list_group_bots` 获取群内可用机器人
+3. 找到合适的机器人后，用 `format_at_tag` 生成@标签
+4. 在回复中直接@目标机器人分配任务
+
+**@格式必须正确**：
+- 必须用 `<at user_id="ou_xxx">名字</at> (名字)` 格式
+- 禁止用 @名字 或 @[名字] 这种写法（不会触发投递）
+
+**防止无限循环**：
+- 每个任务回复末尾加 `[任务完成]` 标记
+- 收到 `[任务完成]` 或"已完成"/"结果如下"的汇报时，不要再@回去
+- 只汇总结果回复给用户，除非需要对方继续工作
+
+**角色定位**：
+- 协调者：@其他机器人分配任务，收到结果后汇总给用户，不再@回去
+- 执行者：完成后 @ 回发起者汇报，末尾加 `[任务完成]`
+
+**记住**：飞书群聊的@机制需要特定XML标签格式才能生效。
 """
 
     return {"context": context}
