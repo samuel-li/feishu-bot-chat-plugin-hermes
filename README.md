@@ -2,6 +2,8 @@
 
 飞书群聊机器人间 A2A 协作通信插件 - Hermes 版本
 
+> **二次开发说明**：本项目基于 [feishu-bot-chat-plugin](https://github.com/Leochens/feishu-bot-chat-plugin) (OpenClaw 版本) 进行二次开发，适配 Hermes LLM Agent 框架。
+
 ## 与 OpenClaw 版本的区别
 
 | 特性 | OpenClaw 版本 | Hermes 版本 |
